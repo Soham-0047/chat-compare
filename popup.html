@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Chat Comparator</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>AI Chat Comparator</h1>
+            <div class="disclaimer">
+                <small>⚠️ Personal use only. Respect AI providers' ToS and rate limits.</small>
+            </div>
+        </header>
+
+        <div class="query-section">
+            <textarea 
+                id="queryInput" 
+                placeholder="Enter your query here..."
+                aria-label="Query input"
+                maxlength="2000"
+            ></textarea>
+            <div class="query-actions">
+                <button id="detectTabs" class="secondary-btn" aria-label="Detect available AI tabs">
+                    🔍 Detect Tabs
+                </button>
+                <button id="sendQuery" class="primary-btn" aria-label="Send query to selected AIs">
+                    Send Query
+                </button>
+            </div>
+        </div>
+
+        <div class="ai-selection">
+            <h3>Available AI Platforms:</h3>
+            <div id="aiPlatforms" class="platform-list">
+                <!-- Dynamically populated -->
+            </div>
+        </div>
+
+        <div class="consent-section" id="consentSection" style="display: none;">
+            <div class="consent-box">
+                <p>⚠️ This will interact with your open AI tabs. Allow?</p>
+                <div class="consent-actions">
+                    <button id="allowConsent" class="primary-btn">Allow</button>
+                    <button id="denyConsent" class="secondary-btn">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="responses-section">
+            <div class="responses-header">
+                <h3>Responses</h3>
+                <div class="response-actions">
+                    <button id="clearHistory" class="clear-btn" aria-label="Clear response history">
+                        🗑️ Clear
+                    </button>
+                    <button id="retryQuery" class="retry-btn" aria-label="Retry query" style="display: none;">
+                        🔄 Retry
+                    </button>
+                </div>
+            </div>
+            <div id="responsesContainer" class="responses-container">
+                <div class="empty-state">
+                    <p>No responses yet. Enter a query and click "Send Query" to get started.</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="settings-section">
+            <label class="toggle-container">
+                <input type="checkbox" id="saveHistory">
+                <span class="toggle-slider"></span>
+                Save query history (up to 5)
+            </label>
+        </div>
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "AI Chat Comparator",
+  "version": "1.0.0",
+  "description": "Compare responses from multiple AI chat platforms side-by-side",
+  "permissions": [
+    "tabs",
+    "activeTab",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "https://grok.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "AI Chat Comparator"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self';"
+  }
+}
