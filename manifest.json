@@ -11,7 +11,9 @@
   ],
   "host_permissions": [
     "https://chatgpt.com/*",
-    "https://grok.com/*"
+    "https://chat.openai.com/*",
+    "https://grok.com/*",
+    "https://x.com/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -20,6 +22,24 @@
     "default_popup": "popup.html",
     "default_title": "AI Chat Comparator"
   },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*"
+      ],
+      "js": ["utils.js", "content-chatgpt.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://grok.com/*",
+        "https://x.com/*"
+      ],
+      "js": ["utils.js", "content-grok.js"],
+      "run_at": "document_idle"
+    }
+  ],
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self';"
   }
