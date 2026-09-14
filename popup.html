@@ -30,9 +30,47 @@
                     Send Query
                 </button>
             </div>
+
+            <div class="advanced-panel">
+                <div class="mode-row">
+                    <label class="mode-label">Execution mode</label>
+                    <div class="mode-toggle">
+                        <button type="button" class="mode-btn active" data-mode="browser">Browser AI</button>
+                        <button type="button" class="mode-btn" data-mode="api">Direct API</button>
+                    </div>
+                </div>
+
+                <div id="apiConfigPanel" class="api-config-panel" style="display: none;">
+                    <div class="field-group">
+                        <label for="llmProvider">Provider</label>
+                        <select id="llmProvider">
+                            <option value="openai">OpenAI</option>
+                            <option value="openrouter">OpenRouter</option>
+                            <option value="groq">Groq</option>
+                            <option value="anthropic">Anthropic</option>
+                            <option value="custom">Custom OpenAI-compatible</option>
+                        </select>
+                    </div>
+
+                    <div class="field-group">
+                        <label for="llmModel">Model</label>
+                        <input id="llmModel" type="text" value="gpt-4o-mini" placeholder="gpt-4o-mini">
+                    </div>
+
+                    <div class="field-group">
+                        <label for="llmApiKey">API Key</label>
+                        <input id="llmApiKey" type="password" placeholder="Paste your API key">
+                    </div>
+
+                    <div class="field-group">
+                        <label for="llmBaseUrl">Base URL</label>
+                        <input id="llmBaseUrl" type="text" value="https://api.openai.com/v1" placeholder="https://api.openai.com/v1">
+                    </div>
+                </div>
+            </div>
         </div>
 
-        <div class="ai-selection">
+        <div id="aiSelectionSection" class="ai-selection">
             <h3>Available AI Platforms:</h3>
             <div id="aiPlatforms" class="platform-list">
                 <!-- Dynamically populated -->

@@ -19,6 +19,9 @@ class BackgroundService {
             if (message.type === 'sendQuery') {
                 this.handleSendQuery(message, sendResponse);
                 return true; // Keep message channel open for async response
+            } else if (message.type === 'sendQueryApi') {
+                this.handleDirectApiQuery(message, sendResponse);
+                return true;
             } else if (message.type === 'aiResponse' || message.type === 'aiError') {
                 this.relayToPopup(message);
                 return false;
@@ -42,7 +45,6 @@ class BackgroundService {
         const { query, platforms } = message;
         
         try {
-            // Validate platforms
             if (!platforms || platforms.length === 0) {
                 sendResponse({ success: false, error: 'No platforms selected' });
                 return;
@@ -50,12 +52,10 @@ class BackgroundService {
 
             console.log('Processing query for platforms:', platforms.map(p => `${p.platform} (${p.id})`));
 
-            // Inject content scripts and send queries
             const results = await Promise.allSettled(
                 platforms.map(platform => this.injectAndQuery(platform, query))
             );
 
-            // Log results
             results.forEach((result, index) => {
                 const platform = platforms[index];
                 if (result.status === 'fulfilled') {
@@ -65,7 +65,6 @@ class BackgroundService {
                 }
             });
 
-            // Check if any injections were successful
             const successful = results.filter(r => r.status === 'fulfilled').length;
             
             if (successful === 0) {
@@ -80,6 +79,142 @@ class BackgroundService {
             console.error('Error in handleSendQuery:', error);
             sendResponse({ success: false, error: error.message });
         }
+    }
+
+    async handleDirectApiQuery(message, sendResponse) {
+        const { query, provider, model, apiKey, baseUrl } = message;
+
+        if (!query || !query.trim()) {
+            sendResponse({ success: false, error: 'Query is empty' });
+            return;
+        }
+
+        if (!apiKey || !apiKey.trim()) {
+            sendResponse({ success: false, error: 'API key is required for Direct API mode.' });
+            return;
+        }
+
+        try {
+            const answer = await this.callLlmApi({
+                provider,
+                model,
+                apiKey,
+                baseUrl,
+                query
+            });
+
+            sendResponse({
+                success: true,
+                platform: this.getProviderDisplayName(provider),
+                data: answer
+            });
+        } catch (error) {
+            console.error('Direct API call failed:', error);
+            sendResponse({ success: false, error: error.message || 'Direct API request failed' });
+        }
+    }
+
+    getProviderDisplayName(provider) {
+        const labels = {
+            openai: 'OpenAI',
+            openrouter: 'OpenRouter',
+            groq: 'Groq',
+            anthropic: 'Anthropic',
+            custom: 'Custom API'
+        };
+        return labels[provider] || 'Direct API';
+    }
+
+    async callLlmApi({ provider, model, apiKey, baseUrl, query }) {
+        const providerName = provider || 'openai';
+        const finalModel = model || 'gpt-4o-mini';
+        const base = baseUrl || 'https://api.openai.com/v1';
+        const normalizedBase = base.endsWith('/') ? base.slice(0, -1) : base;
+
+        let requestBody;
+        let headers = {
+            'Content-Type': 'application/json'
+        };
+        let endpoint = `${normalizedBase}/chat/completions`;
+
+        if (providerName === 'anthropic') {
+            endpoint = `${normalizedBase.replace(/\/$/, '')}/v1/messages`;
+            headers = {
+                'Content-Type': 'application/json',
+                'x-api-key': apiKey,
+                'anthropic-version': '2023-06-01'
+            };
+            requestBody = {
+                model: finalModel,
+                max_tokens: 1024,
+                messages: [{ role: 'user', content: query }]
+            };
+        } else if (providerName === 'openrouter') {
+            endpoint = `${normalizedBase.replace(/\/$/, '')}/chat/completions`;
+            headers['Authorization'] = `Bearer ${apiKey}`;
+            headers['HTTP-Referer'] = 'https://github.com';
+            headers['X-Title'] = 'AI Chat Comparator';
+            requestBody = {
+                model: finalModel,
+                messages: [{ role: 'user', content: query }]
+            };
+        } else if (providerName === 'groq') {
+            endpoint = `${normalizedBase.replace(/\/$/, '')}/chat/completions`;
+            headers['Authorization'] = `Bearer ${apiKey}`;
+            requestBody = {
+                model: finalModel,
+                messages: [{ role: 'user', content: query }],
+                temperature: 0.7
+            };
+        } else if (providerName === 'custom') {
+            endpoint = `${normalizedBase.replace(/\/$/, '')}/chat/completions`;
+            headers['Authorization'] = `Bearer ${apiKey}`;
+            requestBody = {
+                model: finalModel,
+                messages: [{ role: 'user', content: query }],
+                temperature: 0.7
+            };
+        } else {
+            endpoint = `${normalizedBase.replace(/\/$/, '')}/chat/completions`;
+            headers['Authorization'] = `Bearer ${apiKey}`;
+            requestBody = {
+                model: finalModel,
+                messages: [{ role: 'user', content: query }],
+                temperature: 0.7
+            };
+        }
+
+        const response = await fetch(endpoint, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(requestBody)
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`API request failed (${response.status}): ${errorText}`);
+        }
+
+        const data = await response.json();
+
+        if (providerName === 'anthropic') {
+            const text = data?.content?.[0]?.text;
+            if (!text) {
+                throw new Error('Anthropic returned an empty response.');
+            }
+            return text;
+        }
+
+        const text = data?.choices?.[0]?.message?.content;
+        if (!text || (Array.isArray(text) && text.length === 0)) {
+            throw new Error('LLM returned no usable content.');
+        }
+
+        if (Array.isArray(text)) {
+            return text.map(item => item?.text || '').join('\n');
+        }
+
+        return typeof text === 'string' ? text : JSON.stringify(text);
     }
 
     async injectAndQuery(platform, query) {

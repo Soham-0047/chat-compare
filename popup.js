@@ -4,6 +4,8 @@ class AIComparator {
         this.selectedPlatforms = [];
         this.currentQuery = '';
         this.responses = [];
+        this.processedResponses = new Set();
+        this.executionMode = 'browser';
         this.isProcessing = false;
         this.responseListener = null;
         this.responseTimeout = null;
@@ -70,6 +72,20 @@ class AIComparator {
 
         document.getElementById('saveHistory').addEventListener('change', () => {
             this.saveSettings();
+        });
+
+        document.querySelectorAll('.mode-btn').forEach((button) => {
+            button.addEventListener('click', () => {
+                this.setExecutionMode(button.dataset.mode);
+            });
+        });
+
+        ['llmProvider', 'llmModel', 'llmApiKey', 'llmBaseUrl'].forEach((id) => {
+            const el = document.getElementById(id);
+            if (el) {
+                el.addEventListener('input', () => this.saveSettings());
+                el.addEventListener('change', () => this.saveSettings());
+            }
         });
     }
 
@@ -158,14 +174,51 @@ class AIComparator {
     updateSendButtonState() {
         const sendBtn = document.getElementById('sendQuery');
         const hasQuery = this.currentQuery.trim().length > 0;
+        const isApiMode = this.executionMode === 'api';
+        const apiConfig = this.getApiConfig();
         const hasSelectedPlatforms = this.selectedPlatforms.length > 0;
-        
-        sendBtn.disabled = !hasQuery || !hasSelectedPlatforms || this.isProcessing;
+        const hasApiKey = Boolean(apiConfig.apiKey && apiConfig.apiKey.trim());
+
+        sendBtn.disabled = !hasQuery || this.isProcessing || (!isApiMode && !hasSelectedPlatforms) || (isApiMode && !hasApiKey);
+    }
+
+    getApiConfig() {
+        return {
+            provider: document.getElementById('llmProvider')?.value || 'openai',
+            model: document.getElementById('llmModel')?.value || 'gpt-4o-mini',
+            apiKey: document.getElementById('llmApiKey')?.value || '',
+            baseUrl: document.getElementById('llmBaseUrl')?.value || 'https://api.openai.com/v1'
+        };
+    }
+
+    setExecutionMode(mode) {
+        this.executionMode = mode;
+        document.querySelectorAll('.mode-btn').forEach((button) => {
+            button.classList.toggle('active', button.dataset.mode === mode);
+        });
+
+        const panel = document.getElementById('apiConfigPanel');
+        if (panel) {
+            panel.style.display = mode === 'api' ? 'flex' : 'none';
+        }
+
+        this.saveSettings();
+        this.updateSendButtonState();
     }
 
     handleSendQuery() {
         if (!this.currentQuery.trim()) {
             this.showError('Please enter a query first.');
+            return;
+        }
+
+        if (this.executionMode === 'api') {
+            const apiConfig = this.getApiConfig();
+            if (!apiConfig.apiKey.trim()) {
+                this.showError('Please enter your API key for Direct API mode.');
+                return;
+            }
+            this.sendDirectApiQuery();
             return;
         }
 
@@ -189,11 +242,8 @@ class AIComparator {
         this.isProcessing = true;
         this.updateSendButtonState();
         
-        // Clear previous responses
         this.responses = [];
         this.renderResponses();
-
-        // Show loading states
         this.showLoadingStates();
 
         try {
@@ -204,7 +254,6 @@ class AIComparator {
                 )
             });
 
-            // Send query to background script (restore original approach)
             const response = await chrome.runtime.sendMessage({
                 type: 'sendQuery',
                 query: this.currentQuery,
@@ -226,6 +275,47 @@ class AIComparator {
         } catch (error) {
             console.error('Error sending query:', error);
             this.showError('Failed to send query. Please try again.');
+            this.isProcessing = false;
+            this.updateSendButtonState();
+        }
+    }
+
+    async sendDirectApiQuery() {
+        const apiConfig = this.getApiConfig();
+        this.isProcessing = true;
+        this.updateSendButtonState();
+        this.responses = [];
+        this.renderResponses();
+        this.showLoadingStates();
+
+        try {
+            const response = await chrome.runtime.sendMessage({
+                type: 'sendQueryApi',
+                query: this.currentQuery,
+                provider: apiConfig.provider,
+                model: apiConfig.model,
+                apiKey: apiConfig.apiKey,
+                baseUrl: apiConfig.baseUrl
+            });
+
+            if (response && response.success) {
+                const result = {
+                    platform: response.platform || 'Direct API',
+                    platformId: 'api',
+                    text: typeof response.data === 'string' ? response.data : JSON.stringify(response.data, null, 2),
+                    timestamp: Date.now()
+                };
+
+                this.responses = [result];
+                this.updateResponseCard(result, this.createResponseCard(result));
+                this.handleAllResponsesReceived();
+            } else {
+                this.showError(response?.error || 'Direct API request failed.');
+            }
+        } catch (error) {
+            console.error('Direct API query error:', error);
+            this.showError(error.message || 'Direct API request failed.');
+        } finally {
             this.isProcessing = false;
             this.updateSendButtonState();
         }
@@ -260,6 +350,28 @@ class AIComparator {
 
     showLoadingStates() {
         const container = document.getElementById('responsesContainer');
+        if (!container) {
+            return;
+        }
+
+        if (this.executionMode === 'api') {
+            const apiConfig = this.getApiConfig();
+            const providerName = apiConfig.provider || 'openai';
+            container.innerHTML = `
+                <div class="response-card" data-platform-id="api">
+                    <div class="response-header">
+                        <div class="response-ai-name">Direct API (${providerName})</div>
+                        <div class="response-timestamp">Waiting for response...</div>
+                    </div>
+                    <div class="loading-spinner">
+                        <div class="spinner"></div>
+                        <p>Calling the selected LLM provider...</p>
+                    </div>
+                </div>
+            `;
+            return;
+        }
+
         container.innerHTML = this.selectedPlatforms.map(id => {
             const platform = this.availablePlatforms.find(p => p.id === id);
             return `
@@ -277,259 +389,53 @@ class AIComparator {
         }).join('');
     }
 
-    // handleAIResponse(data) {
-    //     console.log('Handling AI response:', data);
-        
-    //     // Find the corresponding tab ID
-    //     let platformId = data.platformId;
-    //     if (!platformId) {
-    //         // Try to find the platform by name if platformId is missing
-    //         const platform = this.availablePlatforms.find(p => p.platform === data.platform);
-    //         if (platform) {
-    //             platformId = platform.id;
-    //         }
-    //     }
-        
-    //     const response = {
-    //         platform: data.platform,
-    //         platformId: platformId,
-    //         text: data.text,
-    //         timestamp: data.timestamp || Date.now()
-    //     };
-
-    //     // Update or add response
-    //     const existingIndex = this.responses.findIndex(r => r.platformId === platformId);
-    //     if (existingIndex !== -1) {
-    //         this.responses[existingIndex] = response;
-    //     } else {
-    //         this.responses.push(response);
-    //     }
-
-    //     this.updateResponseCard(response);
-    //     this.checkAllResponsesReceived();
-    // }
-
-handleAIResponse(data) {
-    console.log('Handling AI response:', data);
-    
-    // Prevent duplicate processing of the same response
-    const responseKey = `${data.platform}-${data.timestamp}`;
-    if (this.processedResponses && this.processedResponses.has(responseKey)) {
-        console.log('Duplicate response detected, ignoring:', responseKey);
-        return;
-    }
-    
-    // Initialize processed responses tracker if not exists
-    if (!this.processedResponses) {
-        this.processedResponses = new Set();
-    }
-    this.processedResponses.add(responseKey);
-    
-    // Find platform card by name since IDs don't match
-    const platformCard = this.findPlatformCardByName(data.platform);
-    if (!platformCard) {
-        console.error('Could not find platform card for:', data.platform);
-        return;
-    }
-    
-    const actualPlatformId = parseInt(platformCard.dataset.platformId);
-    console.log('Updating card with platform ID:', actualPlatformId);
-    
-    const response = {
-        platform: data.platform,
-        platformId: actualPlatformId,
-        text: data.text,
-        timestamp: data.timestamp || Date.now()
-    };
-
-    // Update or add response - use platform name as key to prevent duplicates
-    const existingIndex = this.responses.findIndex(r => r.platform === data.platform);
-    if (existingIndex !== -1) {
-        this.responses[existingIndex] = response;
-        console.log('Updated existing response for', data.platform);
-    } else {
-        this.responses.push(response);
-        console.log('Added new response for', data.platform);
-    }
-
-    // Force update the response card
-    this.forceUpdateResponseCard(response, platformCard);
-    this.checkAllResponsesReceived();
-}
-
-// Add this helper method to find platform cards by name
-findPlatformCardByName(platformName) {
-    const cards = document.querySelectorAll('.response-card');
-    for (const card of cards) {
-        const nameElement = card.querySelector('.response-ai-name');
-        if (nameElement && nameElement.textContent.trim() === platformName) {
-            return card;
+    handleAIResponse(data) {
+        if (!data || !data.platform) {
+            console.warn('Ignoring invalid AI response payload:', data);
+            return;
         }
-    }
-    return null;
-}
 
-// Add this method to force update the card content
-forceUpdateResponseCard(response, card) {
-    if (!card) {
-        console.error('No card provided for update');
-        return;
-    }
-
-    console.log('Force updating response card with text:', response.text.substring(0, 100) + '...');
-    
-    const timestamp = new Date(response.timestamp).toLocaleTimeString();
-    
-    if (response.error) {
-        card.innerHTML = `
-            <div class="response-header">
-                <div class="response-ai-name">${response.platform}</div>
-                <div class="response-timestamp">${timestamp}</div>
-            </div>
-            <div class="response-content">
-                <div class="error-message">
-                    <strong>Error:</strong> ${response.error}
-                </div>
-            </div>
-            <div class="response-actions-bar">
-                <button class="retry-btn" onclick="aiComparator.retryPlatform(${response.platformId})">
-                    🔄 Retry
-                </button>
-            </div>
-        `;
-    } else {
-        // Make sure we have text content
-        const formattedText = this.formatResponse(response.text || 'No response text received');
-        
-        card.innerHTML = `
-            <div class="response-header">
-                <div class="response-ai-name">${response.platform}</div>
-                <div class="response-timestamp">${timestamp}</div>
-            </div>
-            <div class="response-content">
-                <div class="response-text">${formattedText}</div>
-            </div>
-            <div class="response-actions-bar">
-                <button class="copy-btn" onclick="aiComparator.copyResponse('${response.platformId}')">
-                    📋 Copy
-                </button>
-            </div>
-        `;
-    }
-    
-    console.log('Card updated successfully for', response.platform);
-}
-
-// Also add this method to clear processed responses when starting new queries
-clearProcessedResponses() {
-    if (this.processedResponses) {
-        this.processedResponses.clear();
-    }
-}
-
-
-// Add this helper method
-findPlatformCardByName(platformName) {
-    const cards = document.querySelectorAll('.response-card');
-    for (const card of cards) {
-        const nameElement = card.querySelector('.response-ai-name');
-        if (nameElement && nameElement.textContent.trim() === platformName) {
-            return card;
+        const responseKey = `${data.platform}-${data.timestamp || Date.now()}`;
+        if (this.processedResponses.has(responseKey)) {
+            console.log('Duplicate response detected, ignoring:', responseKey);
+            return;
         }
-    }
-    return null;
-}
+        this.processedResponses.add(responseKey);
 
-// Also update the updateResponseCard method to be more robust
-updateResponseCard(response) {
-    // Find card by platform name first
-    let card = this.findPlatformCardByName(response.platform);
-    
-    // Fallback to platform ID
-    if (!card) {
-        card = document.querySelector(`[data-platform-id="${response.platformId}"]`);
-    }
-    
-    if (!card) {
-        console.error('Could not find response card for:', response);
-        // Create a new card if none exists
-        this.createResponseCard(response);
-        return;
-    }
+        const platformMatch = this.availablePlatforms.find(p => p.platform === data.platform)
+            || this.availablePlatforms.find(p => p.id === data.platformId);
+        const actualPlatformId = platformMatch ? platformMatch.id : data.platformId;
 
-    console.log('Updating response card for:', response.platform);
-    
-    const timestamp = new Date(response.timestamp).toLocaleTimeString();
-    
-    if (response.error) {
-        card.innerHTML = `
-            <div class="response-header">
-                <div class="response-ai-name">${response.platform}</div>
-                <div class="response-timestamp">${timestamp}</div>
-            </div>
-            <div class="response-content">
-                <div class="error-message">
-                    <strong>Error:</strong> ${response.error}
-                </div>
-            </div>
-            <div class="response-actions-bar">
-                <button class="retry-btn" onclick="aiComparator.retryPlatform(${response.platformId})">
-                    🔄 Retry
-                </button>
-            </div>
-        `;
-    } else {
-        card.innerHTML = `
-            <div class="response-header">
-                <div class="response-ai-name">${response.platform}</div>
-                <div class="response-timestamp">${timestamp}</div>
-            </div>
-            <div class="response-content">${this.formatResponse(response.text)}</div>
-            <div class="response-actions-bar">
-                <button class="copy-btn" onclick="aiComparator.copyResponse('${response.platformId}')">
-                    📋 Copy
-                </button>
-            </div>
-        `;
-    }
-}
+        const response = {
+            platform: data.platform,
+            platformId: actualPlatformId,
+            text: data.text || '',
+            timestamp: data.timestamp || Date.now()
+        };
 
-// Add this method to create a response card if it doesn't exist
-createResponseCard(response) {
-    const container = document.getElementById('responsesContainer');
-    const timestamp = new Date(response.timestamp).toLocaleTimeString();
-    
-    const cardHtml = `
-        <div class="response-card" data-platform-id="${response.platformId}">
-            <div class="response-header">
-                <div class="response-ai-name">${response.platform}</div>
-                <div class="response-timestamp">${timestamp}</div>
-            </div>
-            <div class="response-content">${this.formatResponse(response.text)}</div>
-            <div class="response-actions-bar">
-                <button class="copy-btn" onclick="aiComparator.copyResponse('${response.platformId}')">
-                    📋 Copy
-                </button>
-            </div>
-        </div>
-    `;
-    
-    container.insertAdjacentHTML('beforeend', cardHtml);
-}
+        const existingIndex = this.responses.findIndex(r => r.platform === data.platform || r.platformId === actualPlatformId);
+        if (existingIndex !== -1) {
+            this.responses[existingIndex] = response;
+        } else {
+            this.responses.push(response);
+        }
+
+        const card = this.findPlatformCardByName(data.platform)
+            || document.querySelector(`[data-platform-id="${actualPlatformId}"]`)
+            || this.createResponseCard(response);
+
+        if (card) {
+            this.updateResponseCard(response, card);
+        }
+
+        this.checkAllResponsesReceived();
+    }
 
     handleAIError(data) {
-        console.log('Handling AI error:', data);
-        
-        // Find the corresponding platform/tab by platform name
-        const platform = this.availablePlatforms.find(p => p.platform === data.platform);
+        const platform = this.availablePlatforms.find(p => p.platform === data.platform)
+            || this.availablePlatforms.find(p => p.id === data.platformId);
         const actualPlatformId = platform ? platform.id : data.platformId;
-        
-        console.log('Mapping error:', {
-            receivedPlatformId: data.platformId,
-            actualPlatformId: actualPlatformId,
-            platform: data.platform
-        });
-        
+
         const errorResponse = {
             platform: data.platform,
             platformId: actualPlatformId,
@@ -537,35 +443,47 @@ createResponseCard(response) {
             timestamp: Date.now()
         };
 
-        const existingIndex = this.responses.findIndex(r => r.platformId === actualPlatformId);
+        const existingIndex = this.responses.findIndex(r => r.platform === data.platform || r.platformId === actualPlatformId);
         if (existingIndex !== -1) {
             this.responses[existingIndex] = errorResponse;
         } else {
             this.responses.push(errorResponse);
         }
 
-        this.updateResponseCard(errorResponse);
+        const card = this.findPlatformCardByName(data.platform)
+            || document.querySelector(`[data-platform-id="${actualPlatformId}"]`)
+            || this.createResponseCard(errorResponse);
+
+        if (card) {
+            this.updateResponseCard(errorResponse, card);
+        }
+
         this.checkAllResponsesReceived();
     }
 
-    checkAllResponsesReceived() {
-        console.log('Checking responses:', this.responses.length, '/', this.selectedPlatforms.length);
-        
-        if (this.responses.length >= this.selectedPlatforms.length) {
-            console.log('All responses received');
-            this.handleAllResponsesReceived();
+    findPlatformCardByName(platformName) {
+        const cards = document.querySelectorAll('.response-card');
+        for (const card of cards) {
+            const nameElement = card.querySelector('.response-ai-name');
+            if (nameElement && nameElement.textContent.trim() === platformName) {
+                return card;
+            }
         }
+        return null;
     }
 
-    updateResponseCard(response) {
-        const card = document.querySelector(`[data-platform-id="${response.platformId}"]`);
+    updateResponseCard(response, providedCard = null) {
+        let card = providedCard || this.findPlatformCardByName(response.platform)
+            || document.querySelector(`[data-platform-id="${response.platformId}"]`);
+
         if (!card) {
-            console.error('Could not find response card for platform ID:', response.platformId);
+            console.error('Could not find response card for:', response);
+            this.createResponseCard(response);
             return;
         }
 
         const timestamp = new Date(response.timestamp).toLocaleTimeString();
-        
+
         if (response.error) {
             card.innerHTML = `
                 <div class="response-header">
@@ -589,13 +507,52 @@ createResponseCard(response) {
                     <div class="response-ai-name">${response.platform}</div>
                     <div class="response-timestamp">${timestamp}</div>
                 </div>
-                <div class="response-content">${this.formatResponse(response.text)}</div>
+                <div class="response-content">${this.formatResponse(response.text || 'No response text received')}</div>
                 <div class="response-actions-bar">
                     <button class="copy-btn" onclick="aiComparator.copyResponse('${response.platformId}')">
                         📋 Copy
                     </button>
                 </div>
             `;
+        }
+    }
+
+    createResponseCard(response) {
+        const container = document.getElementById('responsesContainer');
+        if (!container) {
+            return null;
+        }
+
+        const timestamp = new Date(response.timestamp).toLocaleTimeString();
+        const cardHtml = `
+            <div class="response-card" data-platform-id="${response.platformId}">
+                <div class="response-header">
+                    <div class="response-ai-name">${response.platform}</div>
+                    <div class="response-timestamp">${timestamp}</div>
+                </div>
+                <div class="response-content">${this.formatResponse(response.text || response.error || '')}</div>
+                <div class="response-actions-bar">
+                    <button class="copy-btn" onclick="aiComparator.copyResponse('${response.platformId}')">
+                        📋 Copy
+                    </button>
+                </div>
+            </div>
+        `;
+
+        container.insertAdjacentHTML('beforeend', cardHtml);
+        return container.querySelector('.response-card:last-child');
+    }
+
+    clearProcessedResponses() {
+        this.processedResponses = new Set();
+    }
+
+    checkAllResponsesReceived() {
+        console.log('Checking responses:', this.responses.length, '/', this.selectedPlatforms.length);
+        
+        if (this.responses.length >= this.selectedPlatforms.length) {
+            console.log('All responses received');
+            this.handleAllResponsesReceived();
         }
     }
 
@@ -667,11 +624,13 @@ createResponseCard(response) {
 
     retryQuery() {
         this.responses = [];
+        this.clearProcessedResponses();
         this.sendQueryToAIs();
     }
 
     clearResponses() {
         this.responses = [];
+        this.clearProcessedResponses();
         this.renderResponses();
         document.getElementById('retryQuery').style.display = 'none';
         this.isProcessing = false;
@@ -685,6 +644,10 @@ createResponseCard(response) {
 
     renderResponses() {
         const container = document.getElementById('responsesContainer');
+        if (!container) {
+            return;
+        }
+
         if (this.responses.length === 0) {
             container.innerHTML = `
                 <div class="empty-state">
@@ -823,6 +786,19 @@ async sendQueryToAIs() {
         try {
             const settings = await this.getStorageData('settings') || {};
             document.getElementById('saveHistory').checked = settings.saveHistory || false;
+
+            this.executionMode = settings.executionMode || 'browser';
+            const provider = document.getElementById('llmProvider');
+            const model = document.getElementById('llmModel');
+            const apiKey = document.getElementById('llmApiKey');
+            const baseUrl = document.getElementById('llmBaseUrl');
+
+            if (provider) provider.value = settings.provider || 'openai';
+            if (model) model.value = settings.model || 'gpt-4o-mini';
+            if (apiKey) apiKey.value = settings.apiKey || '';
+            if (baseUrl) baseUrl.value = settings.baseUrl || 'https://api.openai.com/v1';
+
+            this.setExecutionMode(this.executionMode);
         } catch (error) {
             console.error('Error loading settings:', error);
         }
@@ -830,8 +806,14 @@ async sendQueryToAIs() {
 
     async saveSettings() {
         try {
+            const apiConfig = this.getApiConfig();
             const settings = {
-                saveHistory: document.getElementById('saveHistory').checked
+                saveHistory: document.getElementById('saveHistory').checked,
+                executionMode: this.executionMode,
+                provider: apiConfig.provider,
+                model: apiConfig.model,
+                apiKey: apiConfig.apiKey,
+                baseUrl: apiConfig.baseUrl
             };
             await chrome.storage.local.set({ settings });
         } catch (error) {
